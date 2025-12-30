@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>F-22 Raptor Flight Simulator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+            background: #000;
+        }
+        
+        #canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        
+        #hud {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            font-family: 'Courier New', monospace;
+            color: #0f0;
+            text-shadow: 0 0 10px #0f0;
+        }
+        
+        .hud-element {
+            position: absolute;
+            color: #0f0;
+            text-shadow: 0 0 5px #0f0;
+            font-size: 14px;
+        }
+        
+        #speedometer {
+            top: 20px;
+            left: 20px;
+        }
+        
+        #altitude {
+            top: 80px;
+            left: 20px;
+        }
+        
+        #missiles {
+            top: 140px;
+            left: 20px;
+        }
+        
+        #fuel {
+            top: 200px;
+            left: 20px;
+        }
+        
+        #gforce {
+            top: 20px;
+            right: 20px;
+        }
+        
+        #heading {
+            top: 80px;
+            right: 20px;
+        }
+        
+        #throttle {
+            top: 140px;
+            right: 20px;
+        }
+        
+        #messages {
+            bottom: 20px;
+            left: 20px;
+            max-width: 300px;
+        }
+        
+        .message {
+            margin: 5px 0;
+            font-size: 12px;
+            animation: fadeOut 3s forwards;
+        }
+        
+        @keyframes fadeOut {
+            0% { opacity: 1; }
+            70% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+        
+        .crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            border: 1px solid #0f0;
+            border-radius: 50%;
+        }
+        
+        .crosshair::before,
+        .crosshair::after {
+            content: '';
+            position: absolute;
+            background: #0f0;
+        }
+        
+        .crosshair::before {
+            width: 8px;
+            height: 1px;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        
+        .crosshair::after {
+            width: 1px;
+            height: 8px;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            border: 2px solid #0f0;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            color: #0f0;
+            font-size: 12px;
+            max-width: 250px;
+        }
+        
+        .instruction-item {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="hud">
+        <div class="crosshair"></div>
+        <div id="speedometer" class="hud-element">
+            Speed: <span id="speed-value">0</span> knots<br>
+            Mach: <span id="mach-value">0.00</span>
+        </div>
+        <div id="altitude" class="hud-element">
+            Altitude: <span id="altitude-value">0</span> ft
+        </div>
+        <div id="missiles" class="hud-element">
+            Missiles: <span id="missile-count">4</span>
+        </div>
+        <div id="fuel" class="hud-element">
+            Fuel: <span id="fuel-value">100</span>%
+        </div>
+        <div id="gforce" class="hud-element">
+            G-Force: <span id="gforce-value">0.0</span>G
+        </div>
+        <div id="heading" class="hud-element">
+            Heading: <span id="heading-value">0</span>°
+        </div>
+        <div id="throttle" class="hud-element">
+            Throttle: <span id="throttle-value">0</span>%
+        </div>
+        <div id="messages"></div>
+        <div id="instructions">
+            <div class="instruction-item"><strong>F-22 SIMULATOR</strong></div>
+            <div class="instruction-item">W/A/S/D - Pitch/Roll</div>
+            <div class="instruction-item">Q/E - Yaw</div>
+            <div class="instruction-item">Mouse - Pitch/Roll</div>
+            <div class="instruction-item">↑/↓ - Throttle</div>
+            <div class="instruction-item">SPACE - Fire</div>
+            <div class="instruction-item">B - Afterburner</div>
+            <div class="instruction-item">C - Change Camera</div>
+            <div class="instruction-item">M - Pause/Resume</div>
+            <div class="instruction-item" id="model-status" style="color: #ff6600; margin-top: 10px;">Loading model...</div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="gltf-loader-simple.js"></script>
+    <script>
+        console.log('THREE.js loaded:', typeof THREE !== 'undefined');
+        console.log('GLTFLoader available:', typeof GLTFLoader !== 'undefined');
+        if (typeof GLTFLoader === 'undefined') {
+            console.error('GLTFLoader FAILED to load');
+        } else {
+            console.log('GLTFLoader OK');
+        }
+    </script>
+    <script src="flight-simulator.js"></script>
+</body>
+</html>
