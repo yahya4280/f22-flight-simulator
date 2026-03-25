@@ -32,13 +32,13 @@
             pointer-events: none;
             font-family: 'Courier New', monospace;
             color: #0f0;
-            text-shadow: 0 0 10px #0f0;
+            text-shadow: 0 0 10px #0f0, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
         }
         
         .hud-element {
             position: absolute;
             color: #0f0;
-            text-shadow: 0 0 5px #0f0;
+            text-shadow: 0 0 5px #0f0, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
             font-size: 14px;
         }
         
@@ -188,7 +188,7 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="GLTFLoader.js"></script>
     <script src="gltf-loader-simple.js"></script>
     <script>
         console.log('THREE.js loaded:', typeof THREE !== 'undefined');

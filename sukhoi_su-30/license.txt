@@ -1,0 +1,11 @@
+Model Information:
+* title:	Sukhoi SU-30
+* source:	https://sketchfab.com/3d-models/sukhoi-su-30-23f23629f35042d78f7ad8f875a49afc
+* author:	Oof (https://sketchfab.com/Oof31)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Sukhoi SU-30" (https://sketchfab.com/3d-models/sukhoi-su-30-23f23629f35042d78f7ad8f875a49afc) by Oof (https://sketchfab.com/Oof31) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

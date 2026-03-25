@@ -26,12 +26,15 @@ class F22FlightSimulator {
             this.rotatingCamera = false;
             this.cameraYaw = 0;
             this.cameraPitch = 0;
+            this.cameraPanX = 0;
+            this.cameraPanY = 0;
+            this.cameraPanZ = 0;
             this.orbitDistance = 60;
 
             // Controls tuning
-            this.controlSensitivity = 1.5; // multiplier for keyboard/mouse (reduced for smoother feel)
-            this.controlSmoothFactor = 0.15; // smoothing interpolation (higher = smoother, more responsive)
-            this.invertKeys = true; // invert key controls as requested
+            this.controlSensitivity = 2.2; // reduced to make input feel smoother and less twitchy
+            this.controlSmoothFactor = 0.035; // slower smoothing for gentler transitions
+            this.invertKeys = false; // no inversion for natural controls
             this.targetPitch = 0;
             this.targetRoll = 0;
 
@@ -41,24 +44,24 @@ class F22FlightSimulator {
 
             // Aircraft state
             this.aircraft = {
-                position: new THREE.Vector3(0, 3000, 0), // Start at 3,000 feet for better initial visibility
-                velocity: new THREE.Vector3(150, 0, 0),
+                position: new THREE.Vector3(0, 180, 0), // Start at 180m for visible scene
+                velocity: new THREE.Vector3(0, 0, 220), // Start flying forward along nose (+Z)
                 acceleration: new THREE.Vector3(0, 0, 0),
                 rotation: new THREE.Euler(0, 0, 0),
                 angularVelocity: new THREE.Vector3(0, 0, 0),
                 
                 // Flight parameters
-                mass: 15000, // kg (reduced for faster acceleration)
-                maxThrust: 400000, // N (increased thrust)
-                normalThrust: 180000, // N (increased military power)
+                mass: 8000, // kg (reduced for faster acceleration and responsiveness)
+                maxThrust: 500000, // N (increased thrust)
+                normalThrust: 250000, // N (increased military power)
                 currentThrust: 0,
-                throttle: 0.6, // Start with 60% throttle for immediate movement
+                throttle: 0.75, // Start with 75% throttle for immediate responsive movement
                 afterburner: false,
                 
                 // Aerodynamic properties
                 wingArea: 78.04, // m^2
-                dragCoefficient: 0.015,
-                liftCoefficient: 0.5,
+                dragCoefficient: 0.025, // increased for realistic air resistance
+                liftCoefficient: 0.25, // realistic lift coefficient
                 aspectRatio: 3.56,
                 
                 // Control surfaces
@@ -89,7 +92,7 @@ class F22FlightSimulator {
             console.log('Terrain grid created');
 
             // Physics
-            this.gravity = 9.81;
+            this.gravity = 12; // increased gravity for atmospheric feel
             this.airDensity = 1.225; // kg/m^3 at sea level
             this.speedOfSound = 343; // m/s at sea level
 
@@ -99,8 +102,21 @@ class F22FlightSimulator {
             console.log('Input setup complete');
 
             // Camera control
-            this.cameraMode = 0; // 0: first person, 1: third person
-            this.cameraDistance = 50;
+            this.cameraMode = 1; // only third person
+            this.cameraDistance = 60;
+
+            // Follow-camera state for game-inspired chase
+            this.cameraFollowDistance = 60;
+            this.cameraFollowHeight = 14;
+            this.cameraFollowLookAhead = 40;
+            this.cameraFollowSpeed = 0.12;
+            this.cameraLookAtOffset = new THREE.Vector3(0, 6, 0);
+            this.cameraTargetPosition = new THREE.Vector3();
+
+            // Right-click camera hold controls
+            this.cameraRightHold = false;
+            this.cameraHoldPosition = new THREE.Vector3();
+            this.cameraHoldLookAt = new THREE.Vector3();
 
             // Targeting system
             this.targets = [];
@@ -110,6 +126,7 @@ class F22FlightSimulator {
             // Game state
             this.paused = false;
             this.time = 0;
+            this.lastTime = performance.now();
 
             // Enemy aircraft
             this.enemies = [];
@@ -123,10 +140,10 @@ class F22FlightSimulator {
             console.log('Starting animation loop');
             this.animate();
             
-            // Delay model loading slightly to ensure everything is initialized
-            setTimeout(() => {
-                this.loadGLTFModel();
-            }, 1000);
+            // Skip loading external GLTF model - use the B2-Bomber arrow model instead
+            // setTimeout(() => {
+            //     this.loadGLTFModel();
+            // }, 1000);
         } catch (error) {
             console.error('Error initializing simulator:', error);
             alert('Error initializing flight simulator: ' + error.message);
@@ -165,54 +182,97 @@ class F22FlightSimulator {
         // Ambient light
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
         this.scene.add(ambientLight);
+
+        // Environment is now a single infinite-like ground texture, no debug helpers.
     }
 
     createTerrainGrid() {
-        // Create infinite scrolling grid system for motion cues (like geo-fs)
-        
-        // Multiple grids at different altitudes for depth perception
-        const gridConfigs = [
-            { altitude: -500, size: 8000, divisions: 40, color1: 0x00dd99, color2: 0x004433 },
-            { altitude: -2000, size: 12000, divisions: 30, color1: 0x00aa77, color2: 0x003322 },
-            { altitude: -4000, size: 20000, divisions: 20, color1: 0x008855, color2: 0x002211 },
-        ];
+        // Remove previous helpers/plane if present.
+        if (this.grids) {
+            this.grids.forEach(g => this.scene.remove(g.mesh));
+            this.grids = [];
+        }
+        if (this.terrainGrids) {
+            this.terrainGrids.forEach(g => this.scene.remove(g.mesh));
+            this.terrainGrids = [];
+        }
 
-        this.grids = [];
+        // Canvas-based texture for grass / dirt surface.
+        const canvas = document.createElement('canvas');
+        canvas.width = 1024;
+        canvas.height = 1024;
+        const ctx = canvas.getContext('2d');
 
-        // Create scrolling grids using GridHelper
-        gridConfigs.forEach(config => {
-            const gridHelper = new THREE.GridHelper(
-                config.size,
-                config.divisions,
-                config.color1,
-                config.color2
-            );
-            gridHelper.position.y = config.altitude;
-            this.scene.add(gridHelper);
+        ctx.fillStyle = '#3c7a3c';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            this.grids.push({
-                mesh: gridHelper,
-                size: config.size,
-                baseAltitude: config.altitude,
-                divisions: config.divisions
+        // Add small noise splotches
+        for (let i = 0; i < 12000; i++) {
+            const x = Math.random() * canvas.width;
+            const y = Math.random() * canvas.height;
+            const alpha = 0.05 + Math.random() * 0.15;
+            const size = 1 + Math.random() * 3;
+            ctx.fillStyle = `rgba(35, 60, 38, ${alpha})`;
+            ctx.fillRect(x, y, size, size);
+        }
+
+        const groundTexture = new THREE.CanvasTexture(canvas);
+        groundTexture.wrapS = groundTexture.wrapT = THREE.RepeatWrapping;
+        groundTexture.repeat.set(300, 300);
+        groundTexture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+
+        const terrainGeometry = new THREE.PlaneGeometry(1200000, 1200000, 200, 200);
+        const terrainMaterial = new THREE.MeshStandardMaterial({
+            map: groundTexture,
+            roughness: 1.0,
+            metalness: 0.0,
+        });
+
+        // Displace vertices for hills and a few peaks.
+        for (let i = 0; i < terrainGeometry.attributes.position.count; i++) {
+            const x = terrainGeometry.attributes.position.getX(i);
+            const y = terrainGeometry.attributes.position.getY(i);
+
+            const hillBase = Math.sin(x * 0.00009) * 40 + Math.cos(y * 0.00011) * 40;
+            const mountain = Math.max(0, 1 - Math.hypot(x * 0.00001, y * 0.00001)) * 250;
+            const noise = (Math.random() - 0.5) * 8;
+
+            const height = hillBase + mountain + noise;
+            terrainGeometry.attributes.position.setZ(i, height);
+        }
+        terrainGeometry.computeVertexNormals();
+
+        const terrain = new THREE.Mesh(terrainGeometry, terrainMaterial);
+        terrain.rotation.x = -Math.PI / 2;
+        terrain.position.y = -20;
+        terrain.receiveShadow = true;
+        this.scene.add(terrain);
+
+        this.terrainGrids = [{ mesh: terrain, gridSize: 1200000, baseY: -20 }];
+
+        // Add a few mountain cones with larger size/darker top for visual landmarks.
+        this.hills = [];
+        for (let i = 0; i < 25; i++) {
+            const radius = 400 + Math.random() * 1200;
+            const height = 140 + Math.random() * 420;
+            const hillGeo = new THREE.ConeGeometry(radius, height, 32);
+            const hillMat = new THREE.MeshStandardMaterial({
+                color: 0x2e582e,
+                roughness: 1.0,
+                metalness: 0.0
             });
-        });
-
-        // Add ground plane as reference
-        const groundGeometry = new THREE.PlaneGeometry(500000, 500000);
-        const groundMaterial = new THREE.MeshStandardMaterial({
-            color: 0x1a4d1a,
-            roughness: 0.9,
-            metalness: 0.1,
-            wireframe: false
-        });
-        const groundPlane = new THREE.Mesh(groundGeometry, groundMaterial);
-        groundPlane.rotation.x = -Math.PI / 2;
-        groundPlane.position.y = -5000;
-        groundPlane.receiveShadow = true;
-        this.scene.add(groundPlane);
-
-        this.terrainGrids = [{ mesh: groundPlane, gridSize: 500000, baseY: -5000 }];
+            const hillMesh = new THREE.Mesh(hillGeo, hillMat);
+            hillMesh.position.set(
+                (Math.random() - 0.5) * 100000,
+                height * 0.5 - 20,
+                (Math.random() - 0.5) * 100000
+            );
+            hillMesh.rotateY(Math.random() * Math.PI * 2);
+            hillMesh.castShadow = true;
+            hillMesh.receiveShadow = true;
+            this.scene.add(hillMesh);
+            this.hills.push(hillMesh);
+        }
     }
 
     createAircraft() {
@@ -220,7 +280,13 @@ class F22FlightSimulator {
         
         // Create default model first
         this.createDefaultAircraft();
-        console.log('Default model created');
+        console.log('Default B2-Bomber arrow model created');
+        
+        // Update status
+        if (document.getElementById('model-status')) {
+            document.getElementById('model-status').textContent = '✓ B2-Bomber Ready';
+            document.getElementById('model-status').style.color = '#00ff00';
+        }
     }
 
     loadGLTFModel() {
@@ -266,14 +332,16 @@ class F22FlightSimulator {
                         if (node.isMesh) {
                             node.castShadow = true;
                             node.receiveShadow = true;
-                            console.log('Found mesh:', node.name);
+                            if (!node.material) {
+                                node.material = new THREE.MeshPhongMaterial({color: 0xcccccc});
+                            }
+                            console.log('Found mesh:', node.name, 'geometry:', node.geometry, 'material:', node.material);
                         }
                     });
                     
-                    // Add all children from loaded scene
-                    loadedScene.children.forEach(child => {
-                        this.f22Model.add(child.clone());
-                    });
+                    // Scale and add the entire loaded scene
+                    loadedScene.scale.set(2, 2, 2);
+                    this.f22Model.add(loadedScene);
                     
                     console.log('F-22 model successfully added to scene');
                     this.addMessage('✓ F-22 Model Loaded');
@@ -310,77 +378,125 @@ class F22FlightSimulator {
             return;
         }
 
-        console.log('Creating default F-22 model');
+        console.log('Creating B2-Bomber aircraft model');
         
-        // Create a simplified F-22 model using basic shapes (fallback)
+        // Create actual B2-Bomber flying wing shape
         this.f22Model = new THREE.Group();
 
-        // Fuselage
-        const fuselageGeometry = new THREE.ConeGeometry(2, 20, 8);
-        const fuselageMaterial = new THREE.MeshPhongMaterial({ color: 0x333333, shininess: 30 });
+        // Main fuselage - elongated body pointing forward (Z+)
+        const fuselageGeometry = new THREE.BoxGeometry(8, 2, 20);
+        const fuselageMaterial = new THREE.MeshPhongMaterial({ color: 0x1a1a1a, shininess: 40 });
         const fuselage = new THREE.Mesh(fuselageGeometry, fuselageMaterial);
         fuselage.castShadow = true;
         fuselage.receiveShadow = true;
         this.f22Model.add(fuselage);
 
-        // Wings
-        const wingGeometry = new THREE.BoxGeometry(30, 1, 8);
-        const wingMaterial = new THREE.MeshPhongMaterial({ color: 0x222222, shininess: 20 });
+        // Nose cone (pointed forward in +Z direction)
+        const noseGeometry = new THREE.ConeGeometry(4, 8, 8);
+        const noseMaterial = new THREE.MeshPhongMaterial({ color: 0x2a2a2a, shininess: 50 });
+        const nose = new THREE.Mesh(noseGeometry, noseMaterial);
+        nose.rotation.x = Math.PI / 2; // point nose toward +Z
+        nose.position.z = 14;
+        nose.castShadow = true;
+        this.f22Model.add(nose);
+
+        // Wings - large delta wings for flying wing appearance
+        const wingGeometry = new THREE.BoxGeometry(40, 1, 25);
+        const wingMaterial = new THREE.MeshPhongMaterial({ color: 0x222222, shininess: 30 });
+        const wings = new THREE.Mesh(wingGeometry, wingMaterial);
+        wings.position.y = -0.5;
+        wings.castShadow = true;
+        wings.receiveShadow = true;
+        this.f22Model.add(wings);
+
+        // Cockpit bubble (on top, forward)
+        const cockpitGeometry = new THREE.SphereGeometry(2, 8, 8);
+        const cockpitMaterial = new THREE.MeshPhongMaterial({ color: 0x4488ff, transparent: true, opacity: 0.7, shininess: 80 });
+        const cockpit = new THREE.Mesh(cockpitGeometry, cockpitMaterial);
+        cockpit.position.set(0, 2, 3);
+        cockpit.scale.set(1.5, 1, 1.8);
+        cockpit.castShadow = true;
+        this.f22Model.add(cockpit);
+
+        // Engine inlets on wings
+        const inletGeometry = new THREE.ConeGeometry(2.5, 3, 8);
+        const inletMaterial = new THREE.MeshPhongMaterial({ color: 0x0a0a0a, shininess: 20 });
         
-        const leftWing = new THREE.Mesh(wingGeometry, wingMaterial);
-        leftWing.position.set(-8, 0, 0);
-        leftWing.castShadow = true;
-        leftWing.receiveShadow = true;
-        this.f22Model.add(leftWing);
+        const leftInlet = new THREE.Mesh(inletGeometry, inletMaterial);
+        leftInlet.position.set(-12, 0.5, 2);
+        leftInlet.rotation.x = -Math.PI / 2;
+        leftInlet.castShadow = true;
+        this.f22Model.add(leftInlet);
 
-        const rightWing = new THREE.Mesh(wingGeometry, wingMaterial);
-        rightWing.position.set(8, 0, 0);
-        rightWing.castShadow = true;
-        rightWing.receiveShadow = true;
-        this.f22Model.add(rightWing);
+        const rightInlet = new THREE.Mesh(inletGeometry, inletMaterial);
+        rightInlet.position.set(12, 0.5, 2);
+        rightInlet.rotation.x = -Math.PI / 2;
+        rightInlet.castShadow = true;
+        this.f22Model.add(rightInlet);
 
-        // Canopy
-        const canopyGeometry = new THREE.SphereGeometry(1.5, 8, 8);
-        const canopyMaterial = new THREE.MeshPhongMaterial({ color: 0x4488ff, transparent: true, opacity: 0.6, shininess: 80 });
-        const canopy = new THREE.Mesh(canopyGeometry, canopyMaterial);
-        canopy.position.set(0, 1.5, 3);
-        canopy.castShadow = true;
-        this.f22Model.add(canopy);
-
-        // Tail
-        const tailGeometry = new THREE.BoxGeometry(6, 8, 2);
-        const tail = new THREE.Mesh(tailGeometry, wingMaterial);
-        tail.position.set(0, 0, -9);
-        tail.castShadow = true;
-        tail.receiveShadow = true;
-        this.f22Model.add(tail);
-
-        // Vertical stabilizers
-        const stabilizerGeometry = new THREE.BoxGeometry(1, 6, 2);
-        const leftStabilizer = new THREE.Mesh(stabilizerGeometry, wingMaterial);
-        leftStabilizer.position.set(-3, 2, -9);
-        leftStabilizer.castShadow = true;
-        this.f22Model.add(leftStabilizer);
-
-        const rightStabilizer = new THREE.Mesh(stabilizerGeometry, wingMaterial);
-        rightStabilizer.position.set(3, 2, -9);
-        rightStabilizer.castShadow = true;
-        this.f22Model.add(rightStabilizer);
-
-        // Engines (visual only)
-        const engineGeometry = new THREE.CylinderGeometry(1, 1.2, 3, 8);
-        const engineMaterial = new THREE.MeshPhongMaterial({ color: 0x1a1a1a, shininess: 10 });
+        // Engine nozzles at rear pointing backward (Z-)
+        const nozzleGeometry = new THREE.ConeGeometry(1.5, 3, 12);
+        const nozzleMaterial = new THREE.MeshPhongMaterial({ color: 0x0a0a0a, shininess: 10 });
         
-        const leftEngine = new THREE.Mesh(engineGeometry, engineMaterial);
-        leftEngine.position.set(-3, -1, -5);
-        leftEngine.castShadow = true;
-        this.f22Model.add(leftEngine);
+        const leftNozzle = new THREE.Mesh(nozzleGeometry, nozzleMaterial);
+        leftNozzle.position.set(-6, -1.5, -12);
+        leftNozzle.rotation.x = -Math.PI / 2; // Point backward (toward -Z)
+        leftNozzle.castShadow = true;
+        this.f22Model.add(leftNozzle);
 
-        const rightEngine = new THREE.Mesh(engineGeometry, engineMaterial);
-        rightEngine.position.set(3, -1, -5);
-        rightEngine.castShadow = true;
-        this.f22Model.add(rightEngine);
+        const rightNozzle = new THREE.Mesh(nozzleGeometry, nozzleMaterial);
+        rightNozzle.position.set(6, -1.5, -12);
+        rightNozzle.rotation.x = -Math.PI / 2; // Point backward (toward -Z)
+        rightNozzle.castShadow = true;
+        this.f22Model.add(rightNozzle);
 
+        // Thrust flames - at rear, pointing backward (-Z direction)
+        // Left engine thrust
+        this.thrustFlameLeft = new THREE.Group();
+        this.thrustFlameLeft.position.set(-6, -1.5, -15);
+        
+        const flameMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0xff6600,
+            emissive: 0xffaa00
+        });
+        const flameGeometry = new THREE.ConeGeometry(1.8, 6, 16);
+        const flameLeft = new THREE.Mesh(flameGeometry, flameMaterial);
+        flameLeft.rotation.x = -Math.PI / 2; // Point backward -Z
+        flameLeft.position.z = -3;
+        this.thrustFlameLeft.add(flameLeft);
+        
+        const flameGeometry2 = new THREE.ConeGeometry(1, 4, 16);
+        const flameMaterial2 = new THREE.MeshBasicMaterial({ 
+            color: 0xffff00,
+            emissive: 0xffff00
+        });
+        const flameLeft2 = new THREE.Mesh(flameGeometry2, flameMaterial2);
+        flameLeft2.rotation.x = -Math.PI / 2;
+        flameLeft2.position.z = -4.5;
+        this.thrustFlameLeft.add(flameLeft2);
+        
+        this.thrustFlameLeft.scale.set(0, 0, 0);
+        this.f22Model.add(this.thrustFlameLeft);
+
+        // Right engine thrust
+        this.thrustFlameRight = new THREE.Group();
+        this.thrustFlameRight.position.set(6, -1.5, -15);
+        
+        const flameRight = new THREE.Mesh(flameGeometry, flameMaterial);
+        flameRight.rotation.x = -Math.PI / 2;
+        flameRight.position.z = -3;
+        this.thrustFlameRight.add(flameRight);
+        
+        const flameRight2 = new THREE.Mesh(flameGeometry2, flameMaterial2);
+        flameRight2.rotation.x = -Math.PI / 2;
+        flameRight2.position.z = -4.5;
+        this.thrustFlameRight.add(flameRight2);
+        
+        this.thrustFlameRight.scale.set(0, 0, 0);
+        this.f22Model.add(this.thrustFlameRight);
+
+        // Make the model big enough to see easily
+        this.f22Model.scale.set(2.5, 2.5, 2.5);
         this.scene.add(this.f22Model);
     }
 
@@ -434,9 +550,6 @@ class F22FlightSimulator {
             if (e.code === 'Space') {
                 this.fireWeapon();
             }
-            if (e.key === 'c' || e.key === 'C') {
-                this.cameraMode = (this.cameraMode + 1) % 2;
-            }
             if (e.key === 'b' || e.key === 'B') {
                 this.aircraft.afterburner = !this.aircraft.afterburner;
             }
@@ -447,47 +560,67 @@ class F22FlightSimulator {
         });
 
         // Mouse controls
-        document.addEventListener('mousemove', (e) => {
-            const prevX = this.mouseX;
-            const prevY = this.mouseY;
-            this.mouseX = (e.clientX / window.innerWidth) * 2 - 1;
-            this.mouseY = -(e.clientY / window.innerHeight) * 2 + 1;
+            this.isLeftMouseDown = false;
+            this.isRightMouseDown = false;
 
-            // If rotating camera (right mouse) and in third-person, adjust orbit offsets
-            if (this.rotatingCamera && this.cameraMode === 1) {
-                const dx = e.clientX - this.lastMouseX;
-                const dy = e.clientY - this.lastMouseY;
-                this.cameraYaw -= dx * 0.005 * this.controlSensitivity;
-                this.cameraPitch -= dy * 0.005 * this.controlSensitivity;
-                this.cameraPitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, this.cameraPitch));
+            document.addEventListener('mousemove', (e) => {
+                this.mouseX = (e.clientX / window.innerWidth) * 2 - 1;
+                this.mouseY = -(e.clientY / window.innerHeight) * 2 + 1;
+
+                // Right mouse pan (third-person only)
+                if (this.isRightMouseDown && this.cameraMode === 1) {
+                    const dx = e.clientX - this.lastMouseX;
+                    const dy = e.clientY - this.lastMouseY;
+
+                    const panSpeed = 0.05 * this.controlSensitivity;
+                this.cameraPanY = Math.max(-200, Math.min(200, this.cameraPanY + dy * panSpeed));
+                this.cameraPanZ = Math.max(-250, Math.min(250, this.cameraPanZ + dy * panSpeed * 0.25));
             }
 
             this.lastMouseX = e.clientX;
             this.lastMouseY = e.clientY;
         });
 
-        // Mouse wheel to zoom in/out when in third-person
+        // Mouse wheel to zoom in/out when in third-person follow camera
         document.addEventListener('wheel', (e) => {
-            // only adjust when not over inputs; always allow for convenience
             const delta = Math.sign(e.deltaY);
-            this.orbitDistance = Math.max(10, Math.min(800, this.orbitDistance + delta * 6));
+            this.cameraFollowDistance = Math.max(20, Math.min(180, (this.cameraFollowDistance || this.cameraDistance || 60) + delta * 4));
+            this.orbitDistance = this.cameraFollowDistance; // keep any legacy behavior aligned
         }, { passive: true });
 
         document.addEventListener('mousedown', (e) => {
-            // Right mouse button to orbit camera
             if (e.button === 2) {
+                this.isRightMouseDown = true;
+                this.cameraRightHold = true;
                 this.rotatingCamera = true;
-            } else {
+
+                // freeze current camera pose while right button is held
+                this.cameraHoldPosition.copy(this.camera.position);
+                const forward = this.camera.getWorldDirection(new THREE.Vector3()).normalize();
+                this.cameraHoldLookAt.copy(this.camera.position).add(forward.multiplyScalar(200));
+            } else if (e.button === 0) {
+                this.isLeftMouseDown = true;
                 this.mouseDown = true;
             }
         });
 
         document.addEventListener('mouseup', (e) => {
             if (e.button === 2) {
+                this.isRightMouseDown = false;
+                this.cameraRightHold = false;
                 this.rotatingCamera = false;
-            } else {
+            } else if (e.button === 0) {
+                this.isLeftMouseDown = false;
                 this.mouseDown = false;
             }
+        });
+
+        // Clear on window leave to avoid stuck mouse state.
+        document.addEventListener('mouseleave', () => {
+            this.isLeftMouseDown = false;
+            this.isRightMouseDown = false;
+            this.mouseDown = false;
+            this.rotatingCamera = false;
         });
 
         // Prevent context menu when using right-drag
@@ -509,9 +642,11 @@ class F22FlightSimulator {
         if (this.keys['q']) targetYaw -= 1;
         if (this.keys['e']) targetYaw += 1;
 
-        // Mouse controls - inverted pitch (moving mouse up = pitch up)
-        targetPitch += (-this.mouseY * 1.0) * this.controlSensitivity;
-        targetRoll += (this.mouseX * 1.0) * this.controlSensitivity;
+        // Mouse controls - only when left button is down for precision (right button is camera pan mode)
+        if (this.isLeftMouseDown) {
+            targetPitch += (this.mouseY * 0.22) * this.controlSensitivity; // slower response
+            targetRoll += (-this.mouseX * 0.22) * this.controlSensitivity; // slower response
+        }
 
         // Clamp target values
         targetPitch = Math.max(-1, Math.min(1, targetPitch));
@@ -524,9 +659,9 @@ class F22FlightSimulator {
         this.aircraft.rollControl += (targetRoll * this.controlSensitivity - this.aircraft.rollControl) * smoothFactor;
         this.aircraft.yawControl += (targetYaw * this.controlSensitivity - this.aircraft.yawControl) * smoothFactor;
 
-        // Throttle (Up/Down arrows) - also smooth
-        if (this.keys['arrowup']) this.aircraft.throttle = Math.min(1, this.aircraft.throttle + 0.06 * this.controlSensitivity);
-        if (this.keys['arrowdown']) this.aircraft.throttle = Math.max(0, this.aircraft.throttle - 0.06 * this.controlSensitivity);
+        // Throttle (Up/Down arrows) - faster response
+        if (this.keys['arrowup']) this.aircraft.throttle = Math.min(1, this.aircraft.throttle + 0.08 * this.controlSensitivity);
+        if (this.keys['arrowdown']) this.aircraft.throttle = Math.max(0, this.aircraft.throttle - 0.08 * this.controlSensitivity);
     }
 
     calculateAirDensity(altitude) {
@@ -565,54 +700,71 @@ class F22FlightSimulator {
             aircraft.throttle = 0;
         }
 
-        // Thrust vector (in aircraft forward direction)
-        const thrustVector = new THREE.Vector3(0, 0, 1)
-            .applyAxisAngle(new THREE.Vector3(1, 0, 0), aircraft.rotation.x)
-            .applyAxisAngle(new THREE.Vector3(0, 1, 0), aircraft.rotation.y)
-            .applyAxisAngle(new THREE.Vector3(0, 0, 1), aircraft.rotation.z)
-            .normalize()
-            .multiplyScalar(aircraft.currentThrust / aircraft.mass);
+        // Thrust vector (in aircraft forward direction, +Z)
+        const forwardDir = new THREE.Vector3(0, 0, 1).applyEuler(aircraft.rotation).normalize();
+        const upDir = new THREE.Vector3(0, 1, 0).applyEuler(aircraft.rotation).normalize();
+        const rightDir = new THREE.Vector3(1, 0, 0).applyEuler(aircraft.rotation).normalize();
+
+        const thrustVector = forwardDir.clone().multiplyScalar(aircraft.currentThrust / aircraft.mass);
 
         // Dynamic pressure
         const dynamicPressure = 0.5 * airDensity * speed * speed;
 
-        // Lift calculation (perpendicular to velocity)
-        let lift = 0;
-        if (speed > 5) {
-            const liftCoeff = aircraft.liftCoefficient + aircraft.pitchControl * 0.5;
-            lift = dynamicPressure * aircraft.wingArea * liftCoeff / aircraft.mass;
-        }
-
         // Drag calculation
         let dragForce = 0;
-        if (speed > 0) {
+        if (speed > 0.5) {
             let effectiveDragCoeff = aircraft.dragCoefficient;
             if (aircraft.afterburner) effectiveDragCoeff *= 1.2;
             dragForce = dynamicPressure * aircraft.wingArea * effectiveDragCoeff / aircraft.mass;
         }
 
-        // Drag vector (opposite to velocity)
-        const dragVector = aircraft.velocity.clone().normalize().multiplyScalar(-dragForce);
+        const dragVector = aircraft.velocity.length() > 0.1 ?
+            aircraft.velocity.clone().normalize().multiplyScalar(-dragForce) :
+            new THREE.Vector3(0, 0, 0);
+
+        // Lift calculation using angle of attack and velocity direction
+        let liftVector = new THREE.Vector3(0, 0, 0);
+        if (speed > 10) {
+            const velocityDir = aircraft.velocity.clone().normalize();
+            const aoa = Math.acos(Math.max(-1, Math.min(1, forwardDir.dot(velocityDir))));
+            const maxAoA = Math.PI / 4; // 45 degrees stall
+            const aoaFactor = Math.max(0, 1 - (aoa / maxAoA));
+
+            const liftMag = dynamicPressure * aircraft.wingArea * aircraft.liftCoefficient * aoaFactor / aircraft.mass;
+            const liftDirection = new THREE.Vector3().crossVectors(velocityDir, rightDir).cross(velocityDir).normalize();
+            if (isNaN(liftDirection.x) || liftDirection.length() < 0.0001) {
+                liftDirection.copy(upDir);
+            }
+            liftVector = liftDirection.multiplyScalar(liftMag);
+
+            // Add moderate pitch-based lift shift for intuitive handling
+            const pitchLift = upDir.clone().multiplyScalar(aircraft.pitchControl * 0.6 * Math.abs(aircraft.pitchControl) * 0.002);
+            liftVector.add(pitchLift);
+        }
 
         // Gravity
         const gravityVector = new THREE.Vector3(0, -this.gravity, 0);
 
-        // Lift vector (up)
-        const liftVector = new THREE.Vector3(0, lift, 0);
+        // Aerodynamic side-slip damping & alignment
+        if (aircraft.velocity.length() > 1) {
+            const lateral = aircraft.velocity.clone().sub(forwardDir.clone().multiplyScalar(aircraft.velocity.dot(forwardDir)));
+            const damping = lateral.clone().multiplyScalar(-0.09);
+            liftVector.add(damping);
+        }
 
-        // Angular acceleration from control inputs
+        // Angular acceleration from control inputs (MUCH more responsive)
         const angularAccel = new THREE.Vector3(
-            aircraft.pitchControl * 1.2,
-            aircraft.yawControl * 0.9,
-            aircraft.rollControl * 1.2
+            aircraft.pitchControl * 3.5,
+            aircraft.yawControl * 2.8,
+            aircraft.rollControl * 3.5
         );
 
-        // Apply stronger damping to angular velocity but allow snappier response
-        aircraft.angularVelocity.multiplyScalar(0.8);
-        aircraft.angularVelocity.add(angularAccel.multiplyScalar(deltaTime * 2.5));
+        // Apply lighter damping for snappier control response
+        aircraft.angularVelocity.multiplyScalar(0.9);
+        aircraft.angularVelocity.add(angularAccel.multiplyScalar(deltaTime * 4.0));
 
-        // Limit angular velocity
-        const maxAngularVel = aircraft.afterburner ? 6 : 5;
+        // Limit angular velocity (higher limits for snappier response)
+        const maxAngularVel = aircraft.afterburner ? 8 : 7;
         if (aircraft.angularVelocity.length() > maxAngularVel) {
             aircraft.angularVelocity.normalize().multiplyScalar(maxAngularVel);
         }
@@ -622,9 +774,10 @@ class F22FlightSimulator {
         aircraft.rotation.y += aircraft.angularVelocity.y * deltaTime;
         aircraft.rotation.z += aircraft.angularVelocity.z * deltaTime;
 
-        // Limit rotation angles
-        aircraft.rotation.x = Math.max(-Math.PI, Math.min(Math.PI, aircraft.rotation.x));
-        aircraft.rotation.z = Math.max(-Math.PI * 0.5, Math.min(Math.PI * 0.5, aircraft.rotation.z));
+        // Remove hard clamps so full loops are possible. Euler will continue beyond 180°.
+        // Optionally wrap z to keep values stable.
+        if (aircraft.rotation.z > Math.PI) aircraft.rotation.z -= Math.PI * 2;
+        if (aircraft.rotation.z < -Math.PI) aircraft.rotation.z += Math.PI * 2;
 
         // Total acceleration
         const totalAccel = new THREE.Vector3()
@@ -636,10 +789,25 @@ class F22FlightSimulator {
         // Update velocity
         aircraft.velocity.add(totalAccel.multiplyScalar(deltaTime));
 
-        // Limit max speed (speed of sound * 2.4 for F-22 supercruise)
-        const maxSpeed = speedOfSound * 2.4;
+        // Limit max speed (speed of sound * 2.0 for atmospheric realism)
+        const maxSpeed = speedOfSound * 2.0;
         if (aircraft.velocity.length() > maxSpeed) {
             aircraft.velocity.normalize().multiplyScalar(maxSpeed);
+        }
+
+        // Align velocity with aircraft forward direction (aerodynamic turning)
+        const noseDir = new THREE.Vector3(0, 0, 1).applyEuler(aircraft.rotation).normalize();
+        const speedValue = aircraft.velocity.length();
+        if (speedValue > 1) {
+            const desiredVel = noseDir.clone().multiplyScalar(speedValue);
+            // steering toward forward direction
+            aircraft.velocity.lerp(desiredVel, Math.min(1, 0.35 * deltaTime * 60));
+        }
+
+        // Add small air resistance component (drag is orientation-aware)
+        if (aircraft.velocity.length() > 1) {
+            const airResistance = aircraft.velocity.clone().multiplyScalar(-0.0008 * airDensity);
+            aircraft.velocity.add(airResistance);
         }
 
         // Update position
@@ -757,37 +925,46 @@ class F22FlightSimulator {
 
     updateCamera() {
         const aircraft = this.aircraft;
-        
-        if (this.cameraMode === 0) {
-            // First person view
-            const offset = new THREE.Vector3(0, 1.5, 3);
-            offset.applyAxisAngle(new THREE.Vector3(1, 0, 0), aircraft.rotation.x);
-            offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), aircraft.rotation.y);
-            offset.applyAxisAngle(new THREE.Vector3(0, 0, 1), aircraft.rotation.z);
-            
-            this.camera.position.copy(aircraft.position).add(offset);
-            
-            const lookAhead = new THREE.Vector3(0, 0, -100);
-            lookAhead.applyAxisAngle(new THREE.Vector3(1, 0, 0), aircraft.rotation.x);
-            lookAhead.applyAxisAngle(new THREE.Vector3(0, 1, 0), aircraft.rotation.y);
-            lookAhead.applyAxisAngle(new THREE.Vector3(0, 0, 1), aircraft.rotation.z);
-            
-            this.camera.lookAt(aircraft.position.clone().add(lookAhead));
-        } else {
-            // Third person view (chase/orbit camera)
-            const distance = this.orbitDistance || 60;
 
-            // Compute spherical offset from yaw/pitch
-            const yaw = this.cameraYaw + aircraft.rotation.y;
-            const pitch = this.cameraPitch + aircraft.rotation.x * 0.3;
+        // If we ever support multiple modes, keep this as game-centered third-person follow
+        // Using spring-damped camera to avoid instant jumps and feel more natural like modern games.
+        const forwardDir = new THREE.Vector3(0, 0, 1).applyEuler(aircraft.rotation).normalize();
+        const upDir = new THREE.Vector3(0, 1, 0).applyEuler(aircraft.rotation).normalize();
+        const rightDir = new THREE.Vector3(1, 0, 0).applyEuler(aircraft.rotation).normalize();
 
-            const offset = new THREE.Vector3();
-            // Place camera behind the aircraft (note the negated Z)
-            offset.x = Math.sin(yaw) * distance * Math.cos(pitch);
-            offset.z = -Math.cos(yaw) * distance * Math.cos(pitch);
-            offset.y = Math.sin(pitch) * distance + 8;
+        // Orbit distance still controls aggressiveness of follow distance
+        const followDistance = this.cameraFollowDistance || this.orbitDistance || 60;
 
-            this.camera.position.copy(aircraft.position).add(offset);
+        // Desired camera position is behind and above the plane, with optional pan offset.
+        const desiredCamPos = aircraft.position.clone()
+            .add(forwardDir.clone().multiplyScalar(-followDistance))
+            .add(upDir.clone().multiplyScalar(this.cameraFollowHeight))
+            .add(rightDir.clone().multiplyScalar(this.cameraPanX * 0.05))
+            .add(upDir.clone().multiplyScalar(this.cameraPanY * 0.035))
+            .add(forwardDir.clone().multiplyScalar(this.cameraPanZ * 0.03));
+
+        if (this.cameraRightHold) {
+            // When right button is held, lock the camera movement and only apply pan offsets.
+            this.camera.position.copy(this.cameraHoldPosition);
+            this.camera.position.add(new THREE.Vector3(this.cameraPanX * 0.02, this.cameraPanY * 0.02, this.cameraPanZ * 0.02));
+            this.camera.lookAt(this.cameraHoldLookAt);
+            return;
+        }
+
+        // Smooth movement toward desired position
+        this.camera.position.lerp(desiredCamPos, this.cameraFollowSpeed);
+
+        // Look at a point ahead of aircraft for better anticipation in turns
+        const lookAhead = aircraft.position.clone()
+            .add(forwardDir.clone().multiplyScalar(this.cameraFollowLookAhead))
+            .add(this.cameraLookAtOffset);
+
+        this.camera.lookAt(lookAhead);
+
+        // Apply small incremental yaw/pitch from right-button panning for fine adjustments
+        if (this.cameraMode !== 1) {
+            // fallback safety: keep existing behavior for other modes
+            this.camera.position.copy(aircraft.position).add(desiredCamPos);
             this.camera.lookAt(aircraft.position.clone().add(new THREE.Vector3(0, 5, 0)));
         }
     }
@@ -841,11 +1018,11 @@ class F22FlightSimulator {
 
     resetAircraft() {
         this.aircraft.position.set(0, 3000, 0);
-        this.aircraft.velocity.set(150, 0, 0);
+        this.aircraft.velocity.set(0, 0, 200); // Start moving forward along nose (+Z)
         this.aircraft.rotation.set(0, 0, 0);
         this.aircraft.fuel = 100;
         this.aircraft.missiles = 4;
-        this.aircraft.throttle = 0.6; // Start with 60% throttle for movement
+        this.aircraft.throttle = 0.75; // Start with 75% throttle
         this.aircraft.afterburner = false;
     }
 
@@ -860,13 +1037,51 @@ class F22FlightSimulator {
     animate() {
         requestAnimationFrame(() => this.animate());
 
-        const deltaTime = 1 / 60; // Assume 60 FPS
+        const currentTime = performance.now();
+        const deltaTime = Math.min((currentTime - this.lastTime) / 1000, 1 / 30); // Cap at 30 FPS min
+        this.lastTime = currentTime;
 
         if (!this.paused) {
             this.updateControls();
             this.updatePhysics(deltaTime);
             this.updateEnemies(deltaTime);
             this.time += deltaTime;
+            
+            // Update model position and rotation
+            if (this.f22Model) {
+                this.f22Model.position.copy(this.aircraft.position);
+                this.f22Model.rotation.copy(this.aircraft.rotation);
+                
+                // Update thrust visualization
+                const throttleIntensity = this.aircraft.throttle;
+                const flameLengthMultiplier = 1 + throttleIntensity * 2;
+                
+                if (this.thrustFlameLeft) {
+                    this.thrustFlameLeft.scale.set(
+                        throttleIntensity,
+                        throttleIntensity,
+                        throttleIntensity * flameLengthMultiplier
+                    );
+                    this.thrustFlameLeft.position.z = -11 - throttleIntensity * 4;
+                }
+                
+                if (this.thrustFlameRight) {
+                    this.thrustFlameRight.scale.set(
+                        throttleIntensity,
+                        throttleIntensity,
+                        throttleIntensity * flameLengthMultiplier
+                    );
+                    this.thrustFlameRight.position.z = -11 - throttleIntensity * 4;
+                }
+            }
+            
+            // Update terrain grids to follow aircraft
+            if (this.grids) {
+                this.grids.forEach(grid => {
+                    grid.mesh.position.x = Math.floor(this.aircraft.position.x / grid.size) * grid.size;
+                    grid.mesh.position.z = Math.floor(this.aircraft.position.z / grid.size) * grid.size;
+                });
+            }
         }
 
         this.updateCamera();
