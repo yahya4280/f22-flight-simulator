@@ -48,6 +48,7 @@ class Su30FlightSimulator {
                 velocity: new THREE.Vector3(0, 0, 220), // Start flying forward along nose (+Z)
                 acceleration: new THREE.Vector3(0, 0, 0),
                 rotation: new THREE.Euler(0, 0, 0),
+                quaternion: new THREE.Quaternion(),
                 angularVelocity: new THREE.Vector3(0, 0, 0),
                 
                 // Flight parameters
@@ -553,6 +554,10 @@ class Su30FlightSimulator {
             if (e.key === 'b' || e.key === 'B') {
                 this.aircraft.afterburner = !this.aircraft.afterburner;
             }
+            if (e.key === 'p' || e.key === 'P') {
+                this.paused = !this.paused;
+                this.addMessage(this.paused ? 'PAUSED' : 'RESUMED');
+            }
         });
 
         document.addEventListener('keyup', (e) => {
@@ -700,84 +705,102 @@ class Su30FlightSimulator {
             aircraft.throttle = 0;
         }
 
-        // Thrust vector (in aircraft forward direction, +Z)
-        const forwardDir = new THREE.Vector3(0, 0, 1).applyEuler(aircraft.rotation).normalize();
-        const upDir = new THREE.Vector3(0, 1, 0).applyEuler(aircraft.rotation).normalize();
-        const rightDir = new THREE.Vector3(1, 0, 0).applyEuler(aircraft.rotation).normalize();
+        // Thrust vector (in aircraft forward direction, +Z), using quaternion for correct local axes
+        const forwardDir = new THREE.Vector3(0, 0, 1).applyQuaternion(aircraft.quaternion).normalize();
+        const upDir = new THREE.Vector3(0, 1, 0).applyQuaternion(aircraft.quaternion).normalize();
+        const rightDir = new THREE.Vector3(1, 0, 0).applyQuaternion(aircraft.quaternion).normalize();
 
         const thrustVector = forwardDir.clone().multiplyScalar(aircraft.currentThrust / aircraft.mass);
 
         // Dynamic pressure
         const dynamicPressure = 0.5 * airDensity * speed * speed;
 
-        // Drag calculation
-        let dragForce = 0;
-        if (speed > 0.5) {
-            let effectiveDragCoeff = aircraft.dragCoefficient;
-            if (aircraft.afterburner) effectiveDragCoeff *= 1.2;
-            dragForce = dynamicPressure * aircraft.wingArea * effectiveDragCoeff / aircraft.mass;
+        // Body-space velocity for AoA calculation (gives stable pitch-dependent lift)
+        const invAircraftQ = aircraft.quaternion.clone().invert();
+        const velocityBody = aircraft.velocity.clone().applyQuaternion(invAircraftQ);
+        const speedBody = velocityBody.length();
+        const forwardSpeed = Math.max(0.001, velocityBody.z);
+
+        // Angle of attack: negative nose-down when velocity has positive Z in body frame
+        const aoaRad = Math.atan2(-velocityBody.y, forwardSpeed);
+        const aoaDeg = THREE.MathUtils.radToDeg(aoaRad);
+
+        // Lift coefficient curve with stall fallback
+        const clBase = 0.02;
+        const clAlpha = 0.066;
+        let cl = Math.max(0, clBase + clAlpha * Math.min(aoaDeg, 18));
+        if (aoaDeg > 18) {
+            const stallFactor = Math.max(0, 1 - (aoaDeg - 18) / 20);
+            cl *= stallFactor;
         }
 
-        const dragVector = aircraft.velocity.length() > 0.1 ?
-            aircraft.velocity.clone().normalize().multiplyScalar(-dragForce) :
-            new THREE.Vector3(0, 0, 0);
-
-        // Lift calculation using angle of attack and velocity direction
+        // Lift is proportional to forward airspeed rather than total world speed
         let liftVector = new THREE.Vector3(0, 0, 0);
-        if (speed > 10) {
+        if (speedBody > 8) {
+            const liftMag = 0.5 * airDensity * forwardSpeed * forwardSpeed * aircraft.wingArea * cl / aircraft.mass;
+            liftVector = upDir.clone().multiplyScalar(liftMag);
+        }
+
+        // Orbiting-side slip damping (stabilization)
+        if (aircraft.velocity.length() > 1) {
+            const lateral = aircraft.velocity.clone().sub(forwardDir.clone().multiplyScalar(aircraft.velocity.dot(forwardDir)));
+            liftVector.add(lateral.multiplyScalar(-0.08));
+        }
+
+        // Drag calculation (parasitic + induced due to lift)
+        let dragVector = new THREE.Vector3(0, 0, 0);
+        if (speed > 1) {
             const velocityDir = aircraft.velocity.clone().normalize();
-            const aoa = Math.acos(Math.max(-1, Math.min(1, forwardDir.dot(velocityDir))));
-            const maxAoA = Math.PI / 4; // 45 degrees stall
-            const aoaFactor = Math.max(0, 1 - (aoa / maxAoA));
+            const parasiticCd = aircraft.dragCoefficient;
+            const inducedCd = (cl * cl) / (Math.PI * Math.max(1, aircraft.aspectRatio) * 0.9);
+            let combinedCd = parasiticCd + inducedCd;
+            if (aircraft.afterburner) combinedCd *= 1.2;
 
-            const liftMag = dynamicPressure * aircraft.wingArea * aircraft.liftCoefficient * aoaFactor / aircraft.mass;
-            const liftDirection = new THREE.Vector3().crossVectors(velocityDir, rightDir).cross(velocityDir).normalize();
-            if (isNaN(liftDirection.x) || liftDirection.length() < 0.0001) {
-                liftDirection.copy(upDir);
-            }
-            liftVector = liftDirection.multiplyScalar(liftMag);
-
-            // Add moderate pitch-based lift shift for intuitive handling
-            const pitchLift = upDir.clone().multiplyScalar(aircraft.pitchControl * 0.6 * Math.abs(aircraft.pitchControl) * 0.002);
-            liftVector.add(pitchLift);
+            const dragAccel = 0.5 * airDensity * speed * speed * aircraft.wingArea * combinedCd / aircraft.mass;
+            dragVector = velocityDir.multiplyScalar(-dragAccel);
         }
 
         // Gravity
-        const gravityVector = new THREE.Vector3(0, -this.gravity, 0);
+        const gravityVector = new THREE.Vector3(0, -9.81, 0);
 
-        // Aerodynamic side-slip damping & alignment
-        if (aircraft.velocity.length() > 1) {
-            const lateral = aircraft.velocity.clone().sub(forwardDir.clone().multiplyScalar(aircraft.velocity.dot(forwardDir)));
-            const damping = lateral.clone().multiplyScalar(-0.09);
-            liftVector.add(damping);
-        }
+        // Roll/pitch/yaw responsiveness depending on airspeed (low speed less instant)
+        const speedFactor = Math.min(1, speed / 100);
+        const inputScale = 0.7 + 0.3 * speedFactor;
 
-        // Angular acceleration from control inputs (MUCH more responsive)
         const angularAccel = new THREE.Vector3(
-            aircraft.pitchControl * 3.5,
-            aircraft.yawControl * 2.8,
-            aircraft.rollControl * 3.5
+            aircraft.pitchControl * 2.5 * inputScale,
+            aircraft.yawControl * 2.1 * inputScale,
+            aircraft.rollControl * 3.5 * inputScale
         );
-
-        // Apply lighter damping for snappier control response
-        aircraft.angularVelocity.multiplyScalar(0.9);
+        aircraft.angularVelocity.multiplyScalar(0.88);
         aircraft.angularVelocity.add(angularAccel.multiplyScalar(deltaTime * 4.0));
 
-        // Limit angular velocity (higher limits for snappier response)
-        const maxAngularVel = aircraft.afterburner ? 8 : 7;
+        const maxAngularVel = aircraft.afterburner ? 6.5 : 6.0;
         if (aircraft.angularVelocity.length() > maxAngularVel) {
             aircraft.angularVelocity.normalize().multiplyScalar(maxAngularVel);
         }
 
-        // Update rotation
-        aircraft.rotation.x += aircraft.angularVelocity.x * deltaTime;
-        aircraft.rotation.y += aircraft.angularVelocity.y * deltaTime;
-        aircraft.rotation.z += aircraft.angularVelocity.z * deltaTime;
+        // Update orientation via quaternion with body-local axis rotation order roll -> pitch -> yaw
+        const rollRot = new THREE.Quaternion().setFromAxisAngle(forwardDir, aircraft.angularVelocity.z * deltaTime);
+        const pitchRot = new THREE.Quaternion().setFromAxisAngle(rightDir, aircraft.angularVelocity.x * deltaTime);
+        const yawRot = new THREE.Quaternion().setFromAxisAngle(upDir, aircraft.angularVelocity.y * deltaTime);
 
-        // Remove hard clamps so full loops are possible. Euler will continue beyond 180°.
-        // Optionally wrap z to keep values stable.
+        aircraft.quaternion.multiply(rollRot);
+        aircraft.quaternion.multiply(pitchRot);
+        aircraft.quaternion.multiply(yawRot);
+
+        // Keep Euler for HUD and possible debugging
+        aircraft.rotation.setFromQuaternion(aircraft.quaternion, 'XYZ');
+
+        // Clamp pitch to prevent unrecoverable vertical full flips in one frame
+        const maxPitch = Math.PI * 0.82;
+        aircraft.rotation.x = Math.min(maxPitch, Math.max(-maxPitch, aircraft.rotation.x));
+
+        // Wrap roll for stability
         if (aircraft.rotation.z > Math.PI) aircraft.rotation.z -= Math.PI * 2;
         if (aircraft.rotation.z < -Math.PI) aircraft.rotation.z += Math.PI * 2;
+
+        aircraft.quaternion.setFromEuler(aircraft.rotation);
 
         // Total acceleration
         const totalAccel = new THREE.Vector3()
@@ -795,13 +818,14 @@ class Su30FlightSimulator {
             aircraft.velocity.normalize().multiplyScalar(maxSpeed);
         }
 
-        // Align velocity with aircraft forward direction (aerodynamic turning)
+        // Align velocity with aircraft forward direction gradually, preserve momentum
         const noseDir = new THREE.Vector3(0, 0, 1).applyEuler(aircraft.rotation).normalize();
         const speedValue = aircraft.velocity.length();
-        if (speedValue > 1) {
+        if (speedValue > 4) {
             const desiredVel = noseDir.clone().multiplyScalar(speedValue);
-            // steering toward forward direction
-            aircraft.velocity.lerp(desiredVel, Math.min(1, 0.35 * deltaTime * 60));
+            // very gentle heading influence to allow gravity/descent when throttle is low
+            const headingAlign = Math.min(1, 0.04 * deltaTime * 60);
+            aircraft.velocity.lerp(desiredVel, headingAlign);
         }
 
         // Add small air resistance component (drag is orientation-aware)
@@ -821,9 +845,9 @@ class Su30FlightSimulator {
             this.resetAircraft();
         }
 
-        // Update model position and rotation
+        // Update model position and orientation
         this.f22Model.position.copy(aircraft.position);
-        this.f22Model.rotation.copy(aircraft.rotation);
+        this.f22Model.quaternion.copy(aircraft.quaternion);
 
         // Update grids to follow aircraft (creates scrolling effect)
         // The grids follow the X and Z position but stay at their base altitudes
@@ -928,9 +952,9 @@ class Su30FlightSimulator {
 
         // If we ever support multiple modes, keep this as game-centered third-person follow
         // Using spring-damped camera to avoid instant jumps and feel more natural like modern games.
-        const forwardDir = new THREE.Vector3(0, 0, 1).applyEuler(aircraft.rotation).normalize();
-        const upDir = new THREE.Vector3(0, 1, 0).applyEuler(aircraft.rotation).normalize();
-        const rightDir = new THREE.Vector3(1, 0, 0).applyEuler(aircraft.rotation).normalize();
+        const forwardDir = new THREE.Vector3(0, 0, 1).applyQuaternion(aircraft.quaternion).normalize();
+        const upDir = new THREE.Vector3(0, 1, 0).applyQuaternion(aircraft.quaternion).normalize();
+        const rightDir = new THREE.Vector3(1, 0, 0).applyQuaternion(aircraft.quaternion).normalize();
 
         // Orbit distance still controls aggressiveness of follow distance
         const followDistance = this.cameraFollowDistance || this.orbitDistance || 60;
