@@ -1,9 +1,9 @@
-// F-22 Raptor Flight Simulator
+// Su-30 Flanker Flight Simulator
 // Realistic flight mechanics with combat capabilities
 
-class F22FlightSimulator {
+class Su30FlightSimulator {
     constructor() {
-        console.log('Initializing F-22 Flight Simulator...');
+        console.log('Initializing Su-30 Flight Simulator...');
         
         try {
             // Scene setup
@@ -284,7 +284,7 @@ class F22FlightSimulator {
         
         // Update status
         if (document.getElementById('model-status')) {
-            document.getElementById('model-status').textContent = '✓ B2-Bomber Ready';
+            document.getElementById('model-status').textContent = '✓ Su-30 Ready';
             document.getElementById('model-status').style.color = '#00ff00';
         }
     }
@@ -309,9 +309,9 @@ class F22FlightSimulator {
             const loader = new LoaderClass();
 
             loader.load(
-                'f22_raptor.glb',
+                'sukhoi_su-30/scene.gltf',
                 (gltf) => {
-                    console.log('✓ Successfully loaded f22_raptor.glb');
+                    console.log('✓ Successfully loaded sukhoi_su-30/scene.gltf');
                     console.log('GLTF Object:', gltf);
                     
                     if (!gltf.scene) {
@@ -343,10 +343,10 @@ class F22FlightSimulator {
                     loadedScene.scale.set(2, 2, 2);
                     this.f22Model.add(loadedScene);
                     
-                    console.log('F-22 model successfully added to scene');
-                    this.addMessage('✓ F-22 Model Loaded');
+                    console.log('Su-30 model successfully added to scene');
+                    this.addMessage('✓ Su-30 Model Loaded');
                     if (document.getElementById('model-status')) {
-                        document.getElementById('model-status').textContent = '✓ F-22 Model Loaded';
+                        document.getElementById('model-status').textContent = '✓ Su-30 Model Loaded';
                         document.getElementById('model-status').style.color = '#00ff00';
                     }
                 },
@@ -357,11 +357,11 @@ class F22FlightSimulator {
                     }
                 },
                 (error) => {
-                    console.error('✗ Failed to load f22_raptor.glb:', error);
+                    console.error('✗ Failed to load sukhoi_su-30/scene.gltf:', error);
                     console.error('Error stack:', error.stack);
                     this.addMessage('Model load failed - check console');
                     if (document.getElementById('model-status')) {
-                        document.getElementById('model-status').textContent = '✗ Load failed';
+                        document.getElementById('model-status').textContent = '✗ Su-30 Load Failed';
                         document.getElementById('model-status').style.color = '#ff0000';
                     }
                 }
@@ -378,9 +378,9 @@ class F22FlightSimulator {
             return;
         }
 
-        console.log('Creating B2-Bomber aircraft model');
+        console.log('Creating Su-30 aircraft model');
         
-        // Create actual B2-Bomber flying wing shape
+        // Create actual Su-30 Flanker shape
         this.f22Model = new THREE.Group();
 
         // Main fuselage - elongated body pointing forward (Z+)
@@ -1094,7 +1094,7 @@ class F22FlightSimulator {
 window.addEventListener('load', () => {
     console.log('Page loaded, initializing simulator');
     try {
-        new F22FlightSimulator();
+        new Su30FlightSimulator();
     } catch (error) {
         console.error('Fatal error:', error);
         alert('Fatal error initializing simulator: ' + error.message);
